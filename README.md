@@ -40,6 +40,14 @@ By default, waybackpack now downloads linked assets (CSS, JavaScript, images, et
 waybackpack http://www.dol.gov/ -d ~/Downloads/dol-wayback --no-assets
 ```
 
+When downloading assets, waybackpack will:
+1. Download all linked CSS, JavaScript, images, and other resources
+2. Fix references to the Wayback Machine in HTML and CSS files 
+3. Process CSS files to resolve URLs within stylesheets
+4. Maintain directory structure similar to the original website
+
+This helps create a more complete local archive that can be viewed offline without the Wayback Machine's toolbar and with properly working styles and scripts.
+
 By default, waybackpack is now rate-limited to 14 requests per minute to be gentle on the Wayback Machine's servers. You can adjust this with the `--rate-limit` option:
 
 ```sh

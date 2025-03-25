@@ -123,6 +123,22 @@ class Pack(object):
             # Extract images
             for img in soup.find_all('img', src=True):
                 resources.append(img['src'])
+
+            # Extract CSS @import and url() references
+            style_tags = soup.find_all('style')
+            for style in style_tags:
+                if style.string:
+                    # Look for @import url() in style tags
+                    import_urls = re.findall(r'@import\s+url\(["\']?([^"\'()]+)["\']?\)', style.string)
+                    for url in import_urls:
+                        if url and not url.startswith('data:'):
+                            resources.append(url)
+                    
+                    # Look for url() in style tags
+                    css_urls = re.findall(r'url\(["\']?([^"\'()]+)["\']?\)', style.string)
+                    for url in css_urls:
+                        if url and not url.startswith('data:'):
+                            resources.append(url)
                 
             # Extract other media (video, audio)
             for source in soup.find_all('source', src=True):
@@ -132,19 +148,45 @@ class Pack(object):
             for link in soup.find_all('link', rel=lambda x: x and ('icon' in x.lower())):
                 if 'href' in link.attrs:
                     resources.append(link['href'])
+                    
+            # Extract background images in inline styles
+            elements_with_style = soup.find_all(style=True)
+            for element in elements_with_style:
+                style_content = element['style']
+                bg_urls = re.findall(r'url\(["\']?([^"\'()]+)["\']?\)', style_content)
+                for url in bg_urls:
+                    if url and not url.startswith('data:'):
+                        resources.append(url)
+                        
+            # Extract iframes
+            for iframe in soup.find_all('iframe', src=True):
+                resources.append(iframe['src'])
             
             # Process the URLs to make them absolute
             processed_resources = []
+            seen_urls = set()  # To avoid duplicates
+            
             for resource_url in resources:
-                # Skip data URLs and anchors
-                if resource_url.startswith('data:') or resource_url.startswith('#'):
+                # Skip data URLs, anchors, and javascript:
+                if resource_url.startswith(('data:', '#', 'javascript:', 'about:')):
                     continue
                     
+                # Remove any wayback machine prefixes that might still be in the URLs
+                resource_url = re.sub(r'^(?:https?://web\.archive\.org)?/web/\d+[a-z_]*/', '', resource_url)
+                
                 # Make relative URLs absolute
                 if not resource_url.startswith(('http://', 'https://', '//')):
                     resource_url = urljoin(base_url, resource_url)
                 
-                processed_resources.append(resource_url)
+                # Normalize the URL
+                if resource_url.startswith('//'):
+                    resource_url = 'https:' + resource_url
+                
+                # Only add unique URLs
+                normalized_url = resource_url.rstrip('/')
+                if normalized_url not in seen_urls:
+                    seen_urls.add(normalized_url)
+                    processed_resources.append(normalized_url)
                 
             return processed_resources
         except Exception as e:
@@ -157,15 +199,49 @@ class Pack(object):
         Download a resource (CSS, JS, image, etc.) from the Wayback Machine
         """
         try:
+            # If the URL contains wayback machine references, clean them up
+            resource_url = re.sub(r'^(?:https?://web\.archive\.org)?/web/\d+[a-z_]*/', '', resource_url)
+            
             # Create an Asset object for the resource
             asset = Asset(resource_url, timestamp)
             
             parsed_resource = urlparse(resource_url)
             path_head, path_tail = os.path.split(parsed_resource.path)
             
+            # Use the last part of the path as the filename
             if path_tail == "":
-                return None  # Skip if path doesn't have a filename
+                # If there's no filename, use the last directory part with .html extension
+                # for paths that might represent directory indexes
+                path_parts = parsed_resource.path.rstrip('/').split('/')
+                if path_parts:
+                    path_tail = path_parts[-1] + ".html"
+                else:
+                    path_tail = "index.html"
+                if not path_tail:
+                    logger.info(f"Skipping resource with no filename: {resource_url}")
+                    return None
                 
+            # Add appropriate extension for JS/CSS if needed
+            if not path_tail.endswith(('.js', '.css', '.html', '.htm', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico')):
+                content_type = self._guess_content_type(resource_url)
+                if 'javascript' in content_type:
+                    path_tail += '.js'
+                elif 'css' in content_type:
+                    path_tail += '.css'
+                elif 'html' in content_type:
+                    path_tail += '.html'
+                elif 'image' in content_type:
+                    if 'png' in content_type:
+                        path_tail += '.png'
+                    elif 'jpeg' in content_type or 'jpg' in content_type:
+                        path_tail += '.jpg'
+                    elif 'gif' in content_type:
+                        path_tail += '.gif'
+                    elif 'svg' in content_type:
+                        path_tail += '.svg'
+                    else:
+                        path_tail += '.img'
+                        
             # Construct the local file path for the resource
             filedir = os.path.join(
                 directory,
@@ -223,6 +299,28 @@ class Pack(object):
                 return None
             else:
                 raise
+
+    def _guess_content_type(self, url):
+        """
+        Guess the content type from the URL if possible
+        """
+        lower_url = url.lower()
+        if '.js' in lower_url or 'javascript' in lower_url:
+            return 'javascript'
+        elif '.css' in lower_url or 'stylesheet' in lower_url:
+            return 'css'
+        elif any(ext in lower_url for ext in ['.html', '.htm']):
+            return 'html'
+        elif any(ext in lower_url for ext in ['.jpg', '.jpeg']):
+            return 'image/jpeg'
+        elif '.png' in lower_url:
+            return 'image/png'
+        elif '.gif' in lower_url:
+            return 'image/gif'
+        elif '.svg' in lower_url:
+            return 'image/svg'
+        else:
+            return 'unknown'
 
     def download_to(
         self,
@@ -302,29 +400,162 @@ class Pack(object):
                 logger.info("Writing to {0}\n".format(filepath))
                 f.write(content)
                 
-            # If this is an HTML file and we want to download assets
-            if download_assets and not raw and (path_tail.endswith(('.html', '.htm')) or 'text/html' in str(content[:1000])):
-                try:
-                    # Extract and download linked resources
-                    resources = self._extract_resources(content, asset.timestamp, asset.original_url)
-                    logger.info(f"Found {len(resources)} resources to download")
+            # If download_assets is enabled, process the file appropriately based on its type
+            if download_assets and not raw:
+                # Check content type to determine how to handle it
+                content_type = self._guess_content_type_from_path(filepath)
+                
+                # For HTML files, extract resources using BeautifulSoup
+                if path_tail.endswith(('.html', '.htm')) or 'text/html' in str(content[:1000]):
+                    try:
+                        # Extract and download linked resources
+                        resources = self._extract_resources(content, asset.timestamp, asset.original_url)
+                        logger.info(f"Found {len(resources)} resources to download")
+                        
+                        # Download each resource
+                        for resource_url in resources:
+                            # Skip delay here as we'll use rate limiting
+                            self._download_resource(
+                                resource_url, 
+                                asset.timestamp,
+                                directory,
+                                raw,
+                                root,
+                                ignore_errors,
+                                no_clobber,
+                                delay,
+                                fallback_char
+                            )
+                    except Exception as e:
+                        if ignore_errors:
+                            logger.warn(f"Error processing HTML assets: {e}")
+                        else:
+                            raise
+                
+                # For CSS files, extract and download any url() references
+                elif path_tail.endswith('.css') or content_type == 'text/css':
+                    try:
+                        # Extract URL references from CSS
+                        css_resources = self._extract_css_resources(content, asset.timestamp, asset.original_url)
+                        if css_resources:
+                            logger.info(f"Found {len(css_resources)} resources in CSS file")
+                            
+                            # Download each CSS resource
+                            for resource_url in css_resources:
+                                self._download_resource(
+                                    resource_url,
+                                    asset.timestamp,
+                                    directory,
+                                    raw,
+                                    root,
+                                    ignore_errors,
+                                    no_clobber,
+                                    delay,
+                                    fallback_char
+                                )
+                    except Exception as e:
+                        if ignore_errors:
+                            logger.warn(f"Error processing CSS assets: {e}")
+                        else:
+                            raise
+    
+    def _extract_css_resources(self, content, timestamp, base_url):
+        """
+        Extract resources referenced in CSS files (url() and @import)
+        """
+        resources = []
+        try:
+            # Decode content if it's bytes
+            if isinstance(content, bytes):
+                # Try different encodings
+                for encoding in ['utf-8', 'latin-1', 'ascii']:
+                    try:
+                        content_str = content.decode(encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    # If all decodings fail, use latin-1 which should at least not error
+                    content_str = content.decode('latin-1', errors='replace')
+            else:
+                content_str = content
+                
+            # Extract url() references
+            url_matches = re.findall(r'url\([\'"]?([^\'")]+)[\'"]?\)', content_str)
+            for url in url_matches:
+                if url and not url.startswith('data:'):
+                    # Remove any wayback machine prefixes
+                    url = re.sub(r'^(?:https?://web\.archive\.org)?/web/\d+[a-z_]*/', '', url)
+                    resources.append(url)
+                
+            # Extract @import references
+            import_matches = re.findall(r'@import\s+[\'"]([^\'";]+)[\'"]', content_str)
+            for url in import_matches:
+                if url and not url.startswith('data:'):
+                    # Remove any wayback machine prefixes
+                    url = re.sub(r'^(?:https?://web\.archive\.org)?/web/\d+[a-z_]*/', '', url)
+                    resources.append(url)
                     
-                    # Download each resource
-                    for resource_url in resources:
-                        # Skip delay here as we'll use rate limiting
-                        self._download_resource(
-                            resource_url, 
-                            asset.timestamp,
-                            directory,
-                            raw,
-                            root,
-                            ignore_errors,
-                            no_clobber,
-                            delay,
-                            fallback_char
-                        )
-                except Exception as e:
-                    if ignore_errors:
-                        logger.warn(f"Error processing assets: {e}")
+            # Process the URLs to make them absolute
+            processed_resources = []
+            seen_urls = set()  # To avoid duplicates
+            
+            for resource_url in resources:
+                # Skip data URLs, anchors, and javascript:
+                if resource_url.startswith(('data:', '#', 'javascript:', 'about:')):
+                    continue
+                
+                # Make relative URLs absolute
+                if not resource_url.startswith(('http://', 'https://', '//')):
+                    # For CSS files, paths may be relative to the CSS file location
+                    # Get the base directory of the CSS file
+                    css_dir = os.path.dirname(urlparse(base_url).path)
+                    if resource_url.startswith('/'):
+                        # Absolute path relative to domain
+                        domain = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
+                        resource_url = f"{domain}{resource_url}"
                     else:
-                        raise
+                        # Relative path to the CSS file
+                        domain = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
+                        if css_dir and css_dir != '/':
+                            full_path = f"{css_dir}/{resource_url}"
+                        else:
+                            full_path = f"/{resource_url}"
+                        resource_url = f"{domain}{full_path}"
+                
+                # Normalize the URL
+                if resource_url.startswith('//'):
+                    resource_url = 'https:' + resource_url
+                
+                # Only add unique URLs
+                normalized_url = resource_url.rstrip('/')
+                if normalized_url not in seen_urls:
+                    seen_urls.add(normalized_url)
+                    processed_resources.append(normalized_url)
+                    
+            return processed_resources
+        except Exception as e:
+            logger.warn(f"Error extracting CSS resources: {e}")
+            return []
+            
+    def _guess_content_type_from_path(self, filepath):
+        """
+        Guess the content type from the file path
+        """
+        filepath = filepath.lower()
+        if filepath.endswith('.css'):
+            return 'text/css'
+        elif filepath.endswith('.js'):
+            return 'text/javascript'
+        elif filepath.endswith(('.html', '.htm')):
+            return 'text/html'
+        elif filepath.endswith(('.jpg', '.jpeg')):
+            return 'image/jpeg'
+        elif filepath.endswith('.png'):
+            return 'image/png'
+        elif filepath.endswith('.gif'):
+            return 'image/gif'
+        elif filepath.endswith('.svg'):
+            return 'image/svg+xml'
+        else:
+            return 'application/octet-stream'
