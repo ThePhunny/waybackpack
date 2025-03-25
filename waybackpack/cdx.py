@@ -12,10 +12,28 @@ class WaybackpackException(Exception):
 
 
 def search(
-    url, from_date=None, to_date=None, uniques_only=False, collapse=None, session=None
+    url, from_date=None, to_date=None, uniques_only=False, collapse=None, session=None, rate_limiter=None
 ):
-
+    """
+    Search the Wayback Machine CDX API for snapshots of a URL.
+    
+    Parameters:
+    - url: The URL to search for
+    - from_date: Optional start date
+    - to_date: Optional end date
+    - uniques_only: If True, return only unique captures
+    - collapse: Optional collapse parameter
+    - session: Session object for HTTP requests
+    - rate_limiter: Optional RateLimiter object to control request rate
+    
+    Returns a list of snapshots matching the criteria.
+    """
     session = session or Session()
+    
+    # Apply rate limiting if a limiter is provided
+    if rate_limiter is not None:
+        rate_limiter.wait_if_needed()
+        
     res = session.get(
         SEARCH_URL,
         params={

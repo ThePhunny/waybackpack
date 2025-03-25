@@ -47,10 +47,25 @@ class Asset(object):
             flag=flag,
         )
 
-    def fetch(self, session=None, raw=False, root=DEFAULT_ROOT):
-
+    def fetch(self, session=None, raw=False, root=DEFAULT_ROOT, rate_limiter=None):
+        """
+        Fetch the asset from the Wayback Machine
+        
+        Parameters:
+        - session: Session object for HTTP requests
+        - raw: If True, fetch the raw, unprocessed asset
+        - root: Root URL for resolving relative paths
+        - rate_limiter: Optional RateLimiter object to control request rate
+        
+        Returns the content of the asset
+        """
         session = session or Session()
         url = self.get_archive_url(raw)
+        
+        # Apply rate limiting if provided
+        if rate_limiter is not None:
+            rate_limiter.wait_if_needed()
+            
         res = session.get(url)
 
         if res is None:
@@ -73,6 +88,9 @@ class Asset(object):
                 log_msg = "Encountered {0} redirect to {1}."
                 logger.info(log_msg.format(code, loc))
                 if session.follow_redirects:
+                    # Apply rate limiting for redirect request
+                    if rate_limiter is not None:
+                        rate_limiter.wait_if_needed()
                     content = session.get(loc).content
                 else:
                     pass

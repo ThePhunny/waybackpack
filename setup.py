@@ -7,7 +7,8 @@ with open("waybackpack/version.py") as fp:
     exec(fp.read(), version)
 
 base_reqs = [
-    "requests"
+    "requests",
+    "beautifulsoup4"
 ]
 
 setup(
@@ -38,7 +39,7 @@ setup(
     packages=find_packages(exclude=["test",]),
     tests_require=[ "pytest", "pytest-coverage" ] + base_reqs,
     extras_require = {
-        'full': ['tqdm']
+        'full': ['tqdm', 'beautifulsoup4']
     },
     install_requires=base_reqs,
     entry_points={

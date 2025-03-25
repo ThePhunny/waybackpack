@@ -34,6 +34,18 @@ Or, just to print the URLs of all archived snapshots:
 waybackpack http://www.dol.gov/ --list
 ```
 
+By default, waybackpack now downloads linked assets (CSS, JavaScript, images, etc.) along with HTML pages. To disable this behavior and only download HTML files:
+
+```sh
+waybackpack http://www.dol.gov/ -d ~/Downloads/dol-wayback --no-assets
+```
+
+By default, waybackpack is now rate-limited to 14 requests per minute to be gentle on the Wayback Machine's servers. You can adjust this with the `--rate-limit` option:
+
+```sh
+waybackpack http://www.dol.gov/ -d ~/Downloads/dol-wayback --rate-limit 10
+```
+
 ## Installation
 
 ```
@@ -49,6 +61,8 @@ usage: waybackpack [-h] [--version] (-d DIR | --list) [--raw] [--root ROOT]
                    [--uniques-only] [--collapse COLLAPSE] [--ignore-errors]
                    [--max-retries MAX_RETRIES] [--no-clobber] [--quiet]
                    [--progress] [--delay DELAY] [--delay-retry DELAY_RETRY]
+                   [--download-assets] [--no-assets] [--rate-limit RATE_LIMIT]
+                   [--rate-limit-window RATE_LIMIT_WINDOW]
                    url
 
 positional arguments:
@@ -100,11 +114,19 @@ options:
   --delay DELAY         Sleep X seconds between each fetch.
   --delay-retry DELAY_RETRY
                         Sleep X seconds between each post-error retry.
+  --download-assets     Download linked assets (CSS, JavaScript, images, etc.)
+                        from HTML pages (default).
+  --no-assets           Do not download linked assets, only the HTML files.
+  --rate-limit RATE_LIMIT
+                        Maximum number of requests per minute to make to the
+                        Wayback Machine (default: 14).
+  --rate-limit-window RATE_LIMIT_WINDOW
+                        Time window in seconds for the rate limit (default: 60).
 ```
 
 ## Support
 
-Waypackback is written in pure Python, depends only on [`requests`](docs.python-requests.org), and should work wherever Python works. Requires Python 3.3+.
+Waypackback is written in Python and depends on [`requests`](docs.python-requests.org) and [`beautifulsoup4`](https://www.crummy.com/software/BeautifulSoup/) (for parsing HTML to extract assets). Requires Python 3.3+.
 
 ## Thanks
 

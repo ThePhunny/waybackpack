@@ -3,7 +3,7 @@ import argparse
 import logging
 
 from .cdx import search
-from .pack import Pack
+from .pack import Pack, RateLimiter
 from .session import Session
 from .settings import DEFAULT_ROOT, DEFAULT_USER_AGENT
 from .version import __version__
@@ -120,7 +120,39 @@ def parse_args():
         help="Sleep X seconds between each post-error retry.",
     )
 
+    parser.add_argument(
+        "--download-assets",
+        action="store_true",
+        help="Download linked assets (CSS, JavaScript, images, etc.) from HTML pages.",
+        default=True,
+    )
+
+    parser.add_argument(
+        "--no-assets",
+        action="store_true",
+        help="Do not download linked assets, only the HTML files.",
+    )
+    
+    parser.add_argument(
+        "--rate-limit",
+        type=int,
+        default=14,
+        help="Maximum number of requests per minute to make to the Wayback Machine (default: 14).",
+    )
+    
+    parser.add_argument(
+        "--rate-limit-window",
+        type=int,
+        default=60,
+        help="Time window in seconds for the rate limit (default: 60).",
+    )
+
     args = parser.parse_args()
+
+    # If --no-assets is used, it overrides --download-assets
+    if args.no_assets:
+        args.download_assets = False
+        
     return args
 
 
@@ -138,6 +170,12 @@ def main():
         max_retries=args.max_retries,
         delay_retry=args.delay_retry,
     )
+    
+    # Configure rate limiter
+    rate_limiter = RateLimiter(
+        max_requests=args.rate_limit,
+        window_seconds=args.rate_limit_window
+    )
 
     snapshots = search(
         args.url,
@@ -146,11 +184,12 @@ def main():
         to_date=args.to_date,
         uniques_only=args.uniques_only,
         collapse=args.collapse,
+        rate_limiter=rate_limiter,
     )
 
     timestamps = [snap["timestamp"] for snap in snapshots]
 
-    pack = Pack(args.url, timestamps=timestamps, session=session)
+    pack = Pack(args.url, timestamps=timestamps, session=session, rate_limit=rate_limiter)
 
     if args.dir:
         pack.download_to(
@@ -161,6 +200,7 @@ def main():
             no_clobber=args.no_clobber,
             progress=args.progress,
             delay=args.delay,
+            download_assets=args.download_assets,
         )
     else:
         flag = "id_" if args.raw else ""
